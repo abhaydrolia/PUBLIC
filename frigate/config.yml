@@ -58,9 +58,9 @@ genai:
 go2rtc:
   streams:
     rdriveway_main:
-      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_main#audio=pcm#audio=volume   # VERIFY path (was h265 -> 404)
+      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_main#audio=pcm#audio=volume   # confirmed: HEVC 4K (path is h264Preview despite HEVC codec; h265 path 404s)
     rdriveway_sub:
-      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_sub                            # VERIFY path (was 404)
+      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_sub                            # confirmed: h264 640x360
 
     rdoorbell_main:
       - ffmpeg:rtsp://admin:{cam_doorbell_pw}@192.168.1.205:554/h265Preview_01_main#audio=pcm#audio=volume
@@ -163,8 +163,8 @@ cameras:
 
     detect:
       enabled: true
-      width: 1280          # TODO: match real sub resolution
-      height: 720
+      width: 640           # rdriveway sub = h264 640x360 (confirmed via ffprobe)
+      height: 360
     motion:
       mask: 0.942,0.643,0.865,0.757,0.933,0.906,0.978,0.909
     record:
@@ -241,8 +241,8 @@ cameras:
 
     detect:
       enabled: true
-      width: 1280          # TODO: match real sub resolution
-      height: 720
+      width: 640           # rdoorbell sub = h264 640x480 (confirmed via ffprobe)
+      height: 480
     motion:
       threshold: 30
       contour_area: 88
@@ -284,8 +284,8 @@ cameras:
 
     detect:
       enabled: true
-      width: 1280          # TODO: match real sub resolution
-      height: 720
+      width: 640           # backyard sub = h264 640x360 (confirmed via ffprobe)
+      height: 360
     motion:
       threshold: 30
       contour_area: 88
@@ -324,8 +324,8 @@ cameras:
 
     detect:
       enabled: true
-      width: 1280          # TODO: match real sub resolution
-      height: 720
+      width: 640           # dining sub = h264 640x360 (confirmed via ffprobe)
+      height: 360
     motion:
       threshold: 30
       contour_area: 88
