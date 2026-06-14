@@ -42,7 +42,10 @@ mqtt:
 # -----------------------------------------------------------------------------
 genai:
   provider: ollama
-  base_url: http://192.168.1.162:11434
+  # Ollama runs on the Mac mini. NOTE: .62 is its Wi-Fi IP (was .162 on Ethernet).
+  # Pin this with a UniFi Fixed-IP/DHCP reservation on the Mac's Wi-Fi MAC so it
+  # never drifts again and silently breaks GenAI.
+  base_url: http://192.168.1.62:11434
   model: llama3.2-vision:latest
 
 # -----------------------------------------------------------------------------
