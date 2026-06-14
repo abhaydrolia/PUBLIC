@@ -1,0 +1,6 @@
+# Frigate real secrets - never commit
+frigate/frigate.env
+frigate/secrets.yaml
+secrets.yaml
+*.env
+!frigate/frigate.env.example
