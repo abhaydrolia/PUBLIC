@@ -1,0 +1,3 @@
+# Frigate real secrets - never commit
+frigate/secrets.yaml
+secrets.yaml

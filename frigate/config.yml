@@ -1,0 +1,346 @@
+# =============================================================================
+# Frigate configuration  (target: Frigate 0.17.x)
+# Host: Proxmox VM, Intel i7 mini-PC, 30 GB RAM, Google Coral USB TPU
+# -----------------------------------------------------------------------------
+# PREREQUISITES / GOTCHAS (from log analysis 2026-06):
+#   1. SECRETS: real passwords live in /config/secrets.yaml (NOT committed).
+#      Copy secrets.yaml.example -> secrets.yaml on the host and fill it in.
+#      ROTATE the MQTT password + the leaked Gemini key before using this.
+#   2. OLLAMA (GenAI): was failing with "Failed to connect to Ollama" at boot,
+#      so GenAI stayed disabled and logged 1300+ warnings. Make sure Ollama is
+#      running and the model is pulled BEFORE starting Frigate:
+#         ollama list            # on 192.168.1.162 -> must show llama3.2-vision
+#         ollama pull llama3.2-vision
+#      Frigate only initializes GenAI at startup -> restart Frigate afterwards.
+#   3. SEMANTIC SEARCH: needs to download jina-clip-v1 from huggingface.co once.
+#      The Frigate host currently has NO internet ("Network is unreachable"),
+#      so the model never downloaded. Either give the host a one-time internet
+#      window to cache the model, or disable semantic_search below.
+#   4. rdriveway: was returning 404 Stream Not Found (wrong RTSP path) AND was
+#      intermittently offline (No route to host / Connection refused). Verify
+#      the camera's real RTSP path with ffprobe and confirm a static IP:
+#         docker exec -it frigate ffprobe -rtsp_transport tcp \
+#           "rtsp://admin:PASS@192.168.1.233:554/h264Preview_01_main"
+#      Paths marked "VERIFY" below were guesses; fix them to the working path.
+#   5. go2rtc restream: cameras now pull each stream ONCE via 127.0.0.1:8554.
+#      This reduces camera connections (Reolink allows only ~2-3) and fixes the
+#      "Non-monotonic DTS" recording errors seen on rdriveway.
+# =============================================================================
+
+mqtt:
+  host: 192.168.1.29
+  port: 1883
+  topic_prefix: frigate
+  client_id: frigate
+  user: homeassistant
+  password: "{mqtt_password}"        # from secrets.yaml
+  stats_interval: 60
+
+# -----------------------------------------------------------------------------
+# GenAI - offloaded to a local Ollama box (good: keeps load off the Coral host).
+# See PREREQUISITE #2 - Ollama must be up before Frigate starts.
+# -----------------------------------------------------------------------------
+genai:
+  provider: ollama
+  base_url: http://192.168.1.162:11434
+  model: llama3.2-vision:latest
+
+# -----------------------------------------------------------------------------
+# go2rtc - pull each camera ONCE, then Frigate consumes the local restream.
+# NOTE: if Frigate secret substitution ({...}) does not reach this block in your
+# build, switch these to ${ENV_VAR} and set the vars in the container instead.
+# Special chars in passwords must be URL-encoded here (@ -> %40, # -> %23);
+# ffmpeg decodes them back before authenticating.
+# -----------------------------------------------------------------------------
+go2rtc:
+  streams:
+    rdriveway_main:
+      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_main#audio=pcm#audio=volume   # VERIFY path (was h265 -> 404)
+    rdriveway_sub:
+      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_sub                            # VERIFY path (was 404)
+
+    rdoorbell_main:
+      - ffmpeg:rtsp://admin:{cam_doorbell_pw}@192.168.1.205:554/h265Preview_01_main#audio=pcm#audio=volume
+    rdoorbell_sub:
+      - ffmpeg:rtsp://admin:{cam_doorbell_pw}@192.168.1.205:554/h264Preview_01_sub
+
+    backyard_main:
+      - ffmpeg:rtsp://admin:{cam_backyard_pw}@192.168.1.183:554/h265Preview_01_main#audio=pcm#audio=volume
+    backyard_sub:
+      - ffmpeg:rtsp://admin:{cam_backyard_pw}@192.168.1.183:554/h264Preview_01_sub
+
+    dining_main:
+      - ffmpeg:rtsp://admin2:{cam_dining_pw}@192.168.1.249:554/h265Preview_01_main#audio=pcm#audio=volume
+    dining_sub:
+      - ffmpeg:rtsp://admin2:{cam_dining_pw}@192.168.1.249:554/h264Preview_01_sub
+
+  # Boosts doorbell audio. 30dB is aggressive and can clip - try 15dB if harsh.
+  ffmpeg:
+    bin: ffmpeg
+    volume: -af "volume=30dB"
+
+# -----------------------------------------------------------------------------
+# Hardware: Intel QuickSync via VAAPI (logs show no hwaccel errors = working).
+# record uses stream copy, so only the detect substream is actually decoded.
+# -----------------------------------------------------------------------------
+ffmpeg:
+  hwaccel_args: preset-vaapi
+
+detectors:
+  coral:
+    type: edgetpu
+    device: usb
+
+# Global object defaults (per-camera blocks can override `track`).
+objects:
+  track:
+    - person
+    - dog
+    - cat
+  filters:
+    person:
+      min_area: 5000
+      # max_area removed: the old 100000 (~11% of a 720p frame) filtered out
+      # people standing close to the doorbell. Add a per-camera cap if needed.
+
+detect:
+  enabled: true
+  fps: 5                 # explicit; plenty for the Coral and easy on CPU
+  min_initialized: 2
+  max_disappeared: 25
+  stationary:
+    interval: 50
+    threshold: 50
+
+# --- Enrichments (all CPU-friendly "small" models) -----------------------------
+# semantic_search needs the one-time model download - see PREREQUISITE #3.
+semantic_search:
+  enabled: true
+  model_size: small
+
+face_recognition:
+  enabled: true
+  model_size: small
+
+lpr:
+  enabled: true
+  min_area: 4000
+  recognition_threshold: 0.85
+  match_distance: 1
+  known_plates:
+    Bhumika's Car:
+      - 8DBN100
+    Abhay's car:
+      - 9EQE088
+
+classification:
+  bird:
+    enabled: true
+
+# =============================================================================
+# Cameras - all inputs now go through the go2rtc restream (127.0.0.1:8554).
+# Set each camera's detect width/height to the REAL substream resolution
+# (from ffprobe). 1280x720 left as a placeholder; if the sub is smaller,
+# Frigate upscales and wastes CPU.
+# =============================================================================
+cameras:
+  rdriveway:
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/rdriveway_main
+          input_args: preset-rtsp-restream
+          roles:
+            - record
+        - path: rtsp://127.0.0.1:8554/rdriveway_sub
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+      output_args:
+        record: preset-record-generic-audio-copy
+
+    detect:
+      enabled: true
+      width: 1280          # TODO: match real sub resolution
+      height: 720
+    motion:
+      mask: 0.942,0.643,0.865,0.757,0.933,0.906,0.978,0.909
+    record:
+      enabled: true
+      continuous:
+        days: 0
+      motion:
+        days: 7
+    snapshots:
+      enabled: true
+
+    # car added here (not globally) so LPR has something to read plates on.
+    objects:
+      track:
+        - person
+        - dog
+        - cat
+        - car
+      filters:
+        car: {}
+      genai:
+        enabled: true
+        prompt: Describe the {label} in the sequence of images with as much
+          detail as possible. Do not describe the background.
+        use_snapshot: true
+        send_triggers:
+          tracked_object_end: true
+
+    zones:
+      Driveway:
+        coordinates: 0.735,0.314,1,0.59,1,1,0,1,0,0.571,0,0.271
+        loitering_time: 0
+        inertia: 3
+        objects:
+          - person
+          - dog
+          - cat
+          - car
+      Road:
+        coordinates: 0.018,0,1,0,1,0.309,1,0.536,0.642,0.316,0,0.262
+        loitering_time: 0
+        objects: cat
+        inertia: 3
+    review:
+      alerts:
+        required_zones: Driveway
+      detections:
+        required_zones: Driveway
+    semantic_search:
+      triggers:
+        person_seen:
+          enabled: true
+          type: description
+          data: When you see a person
+          threshold: 0.5
+          actions: []
+          friendly_name: Person seen
+
+  rdoorbell:
+    lpr:
+      enabled: false
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/rdoorbell_main
+          input_args: preset-rtsp-restream
+          roles:
+            - record
+        - path: rtsp://127.0.0.1:8554/rdoorbell_sub
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+      output_args:
+        record: preset-record-generic-audio-copy
+
+    detect:
+      enabled: true
+      width: 1280          # TODO: match real sub resolution
+      height: 720
+    motion:
+      threshold: 30
+      contour_area: 88
+      improve_contrast: true
+      mask: 0.475,0.645,0.629,0.659,0.627,0.46,0.474,0.452
+    record:
+      enabled: true
+      continuous:
+        days: 0
+      motion:
+        days: 7
+    snapshots:
+      enabled: true
+
+    objects:
+      genai:
+        enabled: true
+        prompt: Describe the {label} in the sequence of images with as much
+          detail as possible. Do not describe the background.
+        use_snapshot: true
+        send_triggers:
+          tracked_object_end: true
+
+  backyard:
+    lpr:
+      enabled: false
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/backyard_main
+          input_args: preset-rtsp-restream
+          roles:
+            - record
+        - path: rtsp://127.0.0.1:8554/backyard_sub
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+      output_args:
+        record: preset-record-generic-audio-copy
+
+    detect:
+      enabled: true
+      width: 1280          # TODO: match real sub resolution
+      height: 720
+    motion:
+      threshold: 30
+      contour_area: 88
+      improve_contrast: true
+    record:
+      enabled: true
+      continuous:
+        days: 0
+      motion:
+        days: 3
+    snapshots:
+      enabled: true
+
+    objects:
+      genai:
+        enabled: true
+        use_snapshot: true
+        send_triggers:
+          tracked_object_end: true
+
+  dining:
+    lpr:
+      enabled: false
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/dining_main
+          input_args: preset-rtsp-restream
+          roles:
+            - record
+        - path: rtsp://127.0.0.1:8554/dining_sub
+          input_args: preset-rtsp-restream
+          roles:
+            - detect
+      output_args:
+        record: preset-record-generic-audio-copy
+
+    detect:
+      enabled: true
+      width: 1280          # TODO: match real sub resolution
+      height: 720
+    motion:
+      threshold: 30
+      contour_area: 88
+      improve_contrast: true
+    record:
+      enabled: true
+      continuous:
+        days: 0
+      motion:
+        days: 3
+    snapshots:
+      enabled: true
+
+    objects:
+      genai:
+        enabled: true
+        use_snapshot: true
+        send_triggers:
+          tracked_object_end: true
+
+version: 0.17-0
