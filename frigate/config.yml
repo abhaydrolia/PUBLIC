@@ -3,13 +3,15 @@
 # Host: Proxmox VM, Intel i7 mini-PC, 30 GB RAM, Google Coral USB TPU
 # -----------------------------------------------------------------------------
 # PREREQUISITES / GOTCHAS (from log analysis 2026-06):
-#   1. SECRETS: real passwords live in /config/secrets.yaml (NOT committed).
-#      Copy secrets.yaml.example -> secrets.yaml on the host and fill it in.
-#      ROTATE the MQTT password + the leaked Gemini key before using this.
+#   1. SECRETS: this config uses {FRIGATE_*} placeholders. Frigate substitutes
+#      them from ENVIRONMENT VARIABLES on the container (it does NOT read a
+#      secrets.yaml file). Set FRIGATE_MQTT_PASSWORD and the FRIGATE_CAM_*_PW
+#      vars - see frigate.env.example. ROTATE the MQTT password + the leaked
+#      Gemini key before using this.
 #   2. OLLAMA (GenAI): was failing with "Failed to connect to Ollama" at boot,
 #      so GenAI stayed disabled and logged 1300+ warnings. Make sure Ollama is
 #      running and the model is pulled BEFORE starting Frigate:
-#         ollama list            # on 192.168.1.162 -> must show llama3.2-vision
+#         ollama list            # on the Mac mini -> must show llama3.2-vision
 #         ollama pull llama3.2-vision
 #      Frigate only initializes GenAI at startup -> restart Frigate afterwards.
 #   3. SEMANTIC SEARCH: needs to download jina-clip-v1 from huggingface.co once.
@@ -33,7 +35,7 @@ mqtt:
   topic_prefix: frigate
   client_id: frigate
   user: homeassistant
-  password: "{mqtt_password}"        # from secrets.yaml
+  password: "{FRIGATE_MQTT_PASSWORD}"  # Frigate substitutes this from the FRIGATE_MQTT_PASSWORD env var
   stats_interval: 60
 
 # -----------------------------------------------------------------------------
@@ -50,32 +52,32 @@ genai:
 
 # -----------------------------------------------------------------------------
 # go2rtc - pull each camera ONCE, then Frigate consumes the local restream.
-# NOTE: if Frigate secret substitution ({...}) does not reach this block in your
-# build, switch these to ${ENV_VAR} and set the vars in the container instead.
-# Special chars in passwords must be URL-encoded here (@ -> %40, # -> %23);
-# ffmpeg decodes them back before authenticating.
+# Credentials come from FRIGATE_* environment variables set on the container
+# (Frigate does NOT read a secrets.yaml file). See frigate.env.example.
+# Special chars in the password env values must be URL-encoded (@ -> %40,
+# # -> %23); ffmpeg decodes them back before authenticating.
 # -----------------------------------------------------------------------------
 go2rtc:
   streams:
     rdriveway_main:
-      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_main#audio=pcm#audio=volume   # confirmed: HEVC 4K (path is h264Preview despite HEVC codec; h265 path 404s)
+      - ffmpeg:rtsp://admin:{FRIGATE_CAM_DRIVEWAY_PW}@192.168.1.233:554/h264Preview_01_main#audio=pcm#audio=volume   # confirmed: HEVC 4K (path is h264Preview despite HEVC codec; h265 path 404s)
     rdriveway_sub:
-      - ffmpeg:rtsp://admin:{cam_driveway_pw}@192.168.1.233:554/h264Preview_01_sub                            # confirmed: h264 640x360
+      - ffmpeg:rtsp://admin:{FRIGATE_CAM_DRIVEWAY_PW}@192.168.1.233:554/h264Preview_01_sub                            # confirmed: h264 640x360
 
     rdoorbell_main:
-      - ffmpeg:rtsp://admin:{cam_doorbell_pw}@192.168.1.205:554/h265Preview_01_main#audio=pcm#audio=volume
+      - ffmpeg:rtsp://admin:{FRIGATE_CAM_DOORBELL_PW}@192.168.1.205:554/h265Preview_01_main#audio=pcm#audio=volume
     rdoorbell_sub:
-      - ffmpeg:rtsp://admin:{cam_doorbell_pw}@192.168.1.205:554/h264Preview_01_sub
+      - ffmpeg:rtsp://admin:{FRIGATE_CAM_DOORBELL_PW}@192.168.1.205:554/h264Preview_01_sub
 
     backyard_main:
-      - ffmpeg:rtsp://admin:{cam_backyard_pw}@192.168.1.183:554/h265Preview_01_main#audio=pcm#audio=volume
+      - ffmpeg:rtsp://admin:{FRIGATE_CAM_BACKYARD_PW}@192.168.1.183:554/h265Preview_01_main#audio=pcm#audio=volume
     backyard_sub:
-      - ffmpeg:rtsp://admin:{cam_backyard_pw}@192.168.1.183:554/h264Preview_01_sub
+      - ffmpeg:rtsp://admin:{FRIGATE_CAM_BACKYARD_PW}@192.168.1.183:554/h264Preview_01_sub
 
     dining_main:
-      - ffmpeg:rtsp://admin2:{cam_dining_pw}@192.168.1.249:554/h265Preview_01_main#audio=pcm#audio=volume
+      - ffmpeg:rtsp://admin2:{FRIGATE_CAM_DINING_PW}@192.168.1.249:554/h265Preview_01_main#audio=pcm#audio=volume
     dining_sub:
-      - ffmpeg:rtsp://admin2:{cam_dining_pw}@192.168.1.249:554/h264Preview_01_sub
+      - ffmpeg:rtsp://admin2:{FRIGATE_CAM_DINING_PW}@192.168.1.249:554/h264Preview_01_sub
 
   # Boosts doorbell audio. 30dB is aggressive and can clip - try 15dB if harsh.
   ffmpeg:

@@ -5,14 +5,23 @@ Coral USB TPU) running Frigate 0.17.x with four Reolink cameras.
 
 ## Files
 - `config.yml` — the Frigate config. No real secrets in it.
-- `secrets.yaml.example` — template; copy to `/config/secrets.yaml` on the host
-  and fill in real values (kept out of git via `.gitignore`).
+- `frigate.env.example` — template for the environment variables Frigate
+  substitutes into the `{FRIGATE_*}` placeholders. Copy to `frigate.env`, fill
+  in real values, and pass it to the container (`--env-file` / compose
+  `env_file:`). Kept out of git via `.gitignore`.
+
+## How secrets work in Frigate (important)
+Frigate does **not** read a `secrets.yaml` file. It replaces `{FRIGATE_*}`
+placeholders in the config with **environment variables** of the same name.
+So `password: "{FRIGATE_MQTT_PASSWORD}"` requires an env var
+`FRIGATE_MQTT_PASSWORD` on the container. Missing vars crash startup with
+`KeyError` / `Invalid substitution found`.
 
 ## What changed vs. the original (and why)
 
 | Area | Before | After |
 |------|--------|-------|
-| Secrets | MQTT/camera passwords + Gemini key in plaintext | Moved to `secrets.yaml`; key removed |
+| Secrets | MQTT/camera passwords + Gemini key in plaintext | Moved to `{FRIGATE_*}` env-var substitution; key removed |
 | go2rtc | Streams defined but cameras pulled cameras directly (extra connections, DTS errors) | Cameras consume the `127.0.0.1:8554` restream — each camera pulled once |
 | go2rtc backyard | Pointed at the wrong IPs (`.249`/`.227`) | Uses the camera's real IP (`.183`) |
 | Usernames | `admin` vs `admin2` mismatched between go2rtc and cameras | Made consistent per camera |
@@ -35,10 +44,11 @@ Coral USB TPU) running Frigate 0.17.x with four Reolink cameras.
 ## Before this will fully work
 
 1. **Rotate the leaked credentials** (MQTT password + the Gemini API key that
-   was in the old config) and fill in `secrets.yaml`. Camera usernames confirmed:
-   rdriveway/rdoorbell/backyard use `admin`, dining uses `admin2`. Put the real
-   passwords only in `secrets.yaml` on the host — URL-encode any `@`→`%40` and
-   `#`→`%23` in the values used inside RTSP URLs.
+   was in the old config) and set the env vars in `frigate.env`. Camera
+   usernames confirmed: rdriveway/rdoorbell/backyard use `admin`, dining uses
+   `admin2`. Put real passwords only in `frigate.env` on the host — URL-encode
+   any `@`→`%40` and `#`→`%23` in the camera-password values (they go inside
+   RTSP URLs); the MQTT password is raw.
 2. **Pin the Mac mini's IP** — it runs Ollama and moved Ethernet→Wi-Fi, changing
    `.162`→`.62`. Set a UniFi Fixed-IP reservation on its Wi-Fi MAC so GenAI's
    `base_url` (`192.168.1.62`) can't drift again.
